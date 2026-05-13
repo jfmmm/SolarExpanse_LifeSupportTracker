@@ -122,7 +122,7 @@ namespace LifeSupportTracker.UI
                 tabHLG.spacing = 4f;
 
                 (Button statusTabBtn, Image statusTabImg)   = MakeTabButton(tabBarGO.transform, fontAsset, "STATUS",   tabActive);
-                (Button settingsTabBtn, Image settingsTabImg) = MakeTabButton(tabBarGO.transform, fontAsset, "SETTINGS", tabInactive);
+                (Button settingsTabBtn, Image settingsTabImg) = MakeTabButton(tabBarGO.transform, fontAsset, "ALERT THRESHOLDS", tabInactive);
 
                 // ── Scroll viewport — top offset = 8 border + TabH + 4 gap ─────────
                 GameObject viewportGO = new GameObject("ScrollViewport", typeof(RectTransform));
@@ -666,6 +666,11 @@ namespace LifeSupportTracker.UI
             double warnDays, double critDays, bool isDefault,
             Action<double, double> onChanged)
         {
+            int warnYrs = (int)(warnDays / 365);
+            int warnD   = (int)(warnDays % 365);
+            int critYrs = (int)(critDays / 365);
+            int critD   = (int)(critDays % 365);
+
             GameObject rowGO = new GameObject($"SRow_{label}", typeof(RectTransform));
             rowGO.transform.SetParent(parent, false);
             rowGO.AddComponent<LayoutElement>().preferredHeight = 28f;
@@ -675,45 +680,73 @@ namespace LifeSupportTracker.UI
             hlg.childForceExpandWidth  = false;
             hlg.childControlHeight     = true;
             hlg.childForceExpandHeight = true;
-            hlg.spacing = 5f;
+            hlg.spacing = 4f;
             hlg.padding = new RectOffset(6, 6, 2, 2);
 
             Color nameColor = isDefault ? new Color(1f, 0.82f, 0.35f) : Color.white;
-            MakeSettingsLabel(rowGO.transform, label, 0f, 1f, TextAlignmentOptions.MidlineLeft, nameColor);
+            Color grayLbl   = new Color(0.7f, 0.7f, 0.7f);
+            Color dimLbl    = new Color(0.5f, 0.5f, 0.5f);
 
-            MakeSettingsLabel(rowGO.transform, "WARNING",  75f, 0f, TextAlignmentOptions.MidlineRight, new Color(0.7f, 0.7f, 0.7f));
-            TMP_InputField warnField = MakeInputField(rowGO.transform, ((int)warnDays).ToString(), 58f);
-            MakeSettingsLabel(rowGO.transform, "days", 28f, 0f, TextAlignmentOptions.MidlineLeft, new Color(0.5f, 0.5f, 0.5f));
+            MakeSettingsLabel(rowGO.transform, label,    0f, 1f, TextAlignmentOptions.MidlineLeft,  nameColor);
+            MakeSettingsLabel(rowGO.transform, "WARN",  55f, 0f, TextAlignmentOptions.MidlineRight, grayLbl);
+            TMP_InputField warnYrsField = MakeInputField(rowGO.transform, warnYrs.ToString(), 36f);
+            MakeSettingsLabel(rowGO.transform, "yrs",   22f, 0f, TextAlignmentOptions.MidlineLeft,  dimLbl);
+            TMP_InputField warnDaysField = MakeInputField(rowGO.transform, warnD.ToString(), 36f);
+            MakeSettingsLabel(rowGO.transform, "d",     12f, 0f, TextAlignmentOptions.MidlineLeft,  dimLbl);
 
-            MakeSettingsLabel(rowGO.transform, "CRITICAL", 75f, 0f, TextAlignmentOptions.MidlineRight, new Color(0.7f, 0.7f, 0.7f));
-            TMP_InputField critField = MakeInputField(rowGO.transform, ((int)critDays).ToString(), 58f);
-            MakeSettingsLabel(rowGO.transform, "days", 28f, 0f, TextAlignmentOptions.MidlineLeft, new Color(0.5f, 0.5f, 0.5f));
+            MakeSettingsLabel(rowGO.transform, "CRIT",  50f, 0f, TextAlignmentOptions.MidlineRight, grayLbl);
+            TMP_InputField critYrsField = MakeInputField(rowGO.transform, critYrs.ToString(), 36f);
+            MakeSettingsLabel(rowGO.transform, "yrs",   22f, 0f, TextAlignmentOptions.MidlineLeft,  dimLbl);
+            TMP_InputField critDaysField = MakeInputField(rowGO.transform, critD.ToString(), 36f);
+            MakeSettingsLabel(rowGO.transform, "d",     12f, 0f, TextAlignmentOptions.MidlineLeft,  dimLbl);
 
-            string[] lastWarn = { ((int)warnDays).ToString() };
-            string[] lastCrit = { ((int)critDays).ToString() };
+            int[] wyArr = { warnYrs };
+            int[] wdArr = { warnD };
+            int[] cyArr = { critYrs };
+            int[] cdArr = { critD };
 
-            warnField.onEndEdit.AddListener(val =>
+            void ApplyChange()
             {
-                if (int.TryParse(val, out int w) && w > 0)
-                {
-                    int c = int.Parse(lastCrit[0]);
-                    if (w < c) { w = c; warnField.text = w.ToString(); }
-                    lastWarn[0] = w.ToString();
-                    onChanged(w, c);
-                }
-                else warnField.text = lastWarn[0];
+                int w = wyArr[0] * 365 + wdArr[0];
+                int c = cyArr[0] * 365 + cdArr[0];
+                if (w < 0) w = 0;
+                if (c < 0) c = 0;
+                if (w < c) w = c;
+                wyArr[0] = w / 365; wdArr[0] = w % 365;
+                cyArr[0] = c / 365; cdArr[0] = c % 365;
+                warnYrsField.text  = wyArr[0].ToString();
+                warnDaysField.text = wdArr[0].ToString();
+                critYrsField.text  = cyArr[0].ToString();
+                critDaysField.text = cdArr[0].ToString();
+                onChanged(w, c);
+            }
+
+            warnYrsField.onEndEdit.AddListener(val =>
+            {
+                if (int.TryParse(val, out int y) && y >= 0) wyArr[0] = y;
+                else warnYrsField.text = wyArr[0].ToString();
+                ApplyChange();
             });
 
-            critField.onEndEdit.AddListener(val =>
+            warnDaysField.onEndEdit.AddListener(val =>
             {
-                if (int.TryParse(val, out int c) && c > 0)
-                {
-                    int w = int.Parse(lastWarn[0]);
-                    if (c > w) { c = w; critField.text = c.ToString(); }
-                    lastCrit[0] = c.ToString();
-                    onChanged(w, c);
-                }
-                else critField.text = lastCrit[0];
+                if (int.TryParse(val, out int d) && d >= 0) wdArr[0] = d;
+                else warnDaysField.text = wdArr[0].ToString();
+                ApplyChange();
+            });
+
+            critYrsField.onEndEdit.AddListener(val =>
+            {
+                if (int.TryParse(val, out int y) && y >= 0) cyArr[0] = y;
+                else critYrsField.text = cyArr[0].ToString();
+                ApplyChange();
+            });
+
+            critDaysField.onEndEdit.AddListener(val =>
+            {
+                if (int.TryParse(val, out int d) && d >= 0) cdArr[0] = d;
+                else critDaysField.text = cdArr[0].ToString();
+                ApplyChange();
             });
         }
 
