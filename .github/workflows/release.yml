@@ -1,0 +1,21 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify CHANGELOG entry
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          if ! grep -qF "## [$VERSION]" CHANGELOG.md; then
+            echo "::error::No CHANGELOG.md entry found for version $VERSION"
+            exit 1
+          fi
+          echo "CHANGELOG entry verified for $VERSION"
