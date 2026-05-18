@@ -589,6 +589,27 @@ namespace LifeSupportTracker.UI
         private float _refreshTimer;
         private const float RefreshInterval = 5.0f;
 
+        // ── Persistent status-tab UI rows ─────────────────────────────────────
+        private bool _headerBuilt;
+        private GameObject _titleRowGO;
+        private TextMeshProUGUI _titleLbl;
+        private GameObject _headerRowGO;
+        private GameObject _headerSepGO;
+        private GameObject _emptyMsgGO;
+        private TextMeshProUGUI _emptyMsgLbl;
+        private GameObject _shipSepGO;
+        private GameObject _shipLblGO;
+        private readonly Dictionary<string, StatusRowCache> _colonyRowCache  = new Dictionary<string, StatusRowCache>();
+        private readonly Dictionary<string, StatusRowCache> _vehicleRowCache = new Dictionary<string, StatusRowCache>();
+
+        private class StatusRowCache
+        {
+            public GameObject GO;
+            public TextMeshProUGUI NameCol, PopCol, SupplyCol, ProdCol, ConsCol, DaysCol;
+            public Button Btn;
+            public object BoundIdentity;
+        }
+
         private enum Severity { OK, Warning, Critical }
 
         private void Update()
@@ -864,23 +885,31 @@ namespace LifeSupportTracker.UI
 
         internal void RefreshRows()
         {
-            TrackerLog.LogInfo($"[LST] RefreshRows sizeDelta={PanelRT.sizeDelta} rect={PanelRT.rect}");
             try
             {
                 if (ContentParent == null) { TrackerLog.LogError("[LST] ContentParent null"); return; }
-
-                for (int i = ContentParent.childCount - 1; i >= 0; i--)
-                    Destroy(ContentParent.GetChild(i).gameObject);
+                EnsureHeaderRows();
 
                 Company player = MonoBehaviourSingleton<GameManager>.Instance?.Player;
-                if (player == null) { AddMessageRow("Not in game yet."); return; }
+                ResourceDefinition supplyRD = player != null
+                    ? AllScriptableObjectManager.Instance?.AllResourceDefinitions?.GetByID("id_resource_supply")
+                    : null;
+                var allObjects = supplyRD != null
+                    ? MonoBehaviourSingleton<ObjectInfoManager>.Instance?.allObjectInfos
+                    : null;
 
-                ResourceDefinition supplyRD = AllScriptableObjectManager.Instance
-                    ?.AllResourceDefinitions?.GetByID("id_resource_supply");
-                if (supplyRD == null) { AddMessageRow("Supply resource not found."); return; }
-
-                var allObjects = MonoBehaviourSingleton<ObjectInfoManager>.Instance?.allObjectInfos;
-                if (allObjects == null) { AddMessageRow("No object data."); return; }
+                if (player == null || supplyRD == null || allObjects == null)
+                {
+                    bool structChanged = SyncColonyRows(new List<ColonyData>()) | SyncVehicleRows(new List<VehicleData>());
+                    bool wasEmpty = _emptyMsgGO.activeSelf;
+                    _emptyMsgLbl.text = player == null ? "Not in game yet." : "Loading game data...";
+                    if (!wasEmpty) { _emptyMsgGO.SetActive(true); structChanged = true; }
+                    if (_shipSepGO.activeSelf) { _shipSepGO.SetActive(false); structChanged = true; }
+                    if (_shipLblGO.activeSelf) { _shipLblGO.SetActive(false); structChanged = true; }
+                    _titleLbl.text = "LIFE SUPPORT STATUS";
+                    if (structChanged) LayoutRebuilder.ForceRebuildLayoutImmediate(ContentParent as RectTransform);
+                    return;
+                }
 
                 var colonies = new List<ColonyData>();
                 foreach (ObjectInfo oi in allObjects)
@@ -899,13 +928,8 @@ namespace LifeSupportTracker.UI
                     colonies.Add(new ColonyData { OI = oi, Days = days, Supply = supply, PerDay = perDay, ProdPerDay = prodPerDay, Pop = pop });
                 }
                 colonies.Sort((a, b) => a.Days.CompareTo(b.Days));
-
-                // Track active body names for the settings tab
                 _lastActiveBodyNames = colonies.Select(c => c.OI.ObjectName).ToList();
 
-                TrackerLog.LogInfo($"[LST] {colonies.Count} colonies");
-
-                // Ships
                 var vehicles = new List<VehicleData>();
                 float lsMult = MonoBehaviourSingleton<GameManager>.Instance?.Economic
                     .GetLifeSupportMultiplayer(player) ?? 5f;
@@ -959,49 +983,305 @@ namespace LifeSupportTracker.UI
                     }
                     vehicles.Sort((a, b) => a.Days.CompareTo(b.Days));
                 }
-                TrackerLog.LogInfo($"[LST] {vehicles.Count} ships");
 
                 int bodyCount = colonies.Count;
                 int shipCount = vehicles.Count;
-                AddTitleRow($"LIFE SUPPORT STATUS  ({bodyCount} {(bodyCount == 1 ? "body" : "bodies")}, {shipCount} {(shipCount == 1 ? "ship" : "ships")})", ContentParent);
-                AddHeaderRow();
+                _titleLbl.text = $"LIFE SUPPORT STATUS  ({bodyCount} {(bodyCount == 1 ? "body" : "bodies")}, {shipCount} {(shipCount == 1 ? "ship" : "ships")})";
+
+                bool changed = SyncColonyRows(colonies);
+                changed |= SyncVehicleRows(vehicles);
+
+                bool empty = colonies.Count == 0 && vehicles.Count == 0;
+                if (_emptyMsgGO.activeSelf != empty) { _emptyMsgGO.SetActive(empty); changed = true; }
+                if (empty) _emptyMsgLbl.text = "No colonized bodies or ships with crew found.";
+
+                bool hasShips = vehicles.Count > 0;
+                if (_shipSepGO.activeSelf != hasShips) { _shipSepGO.SetActive(hasShips); changed = true; }
+                if (_shipLblGO.activeSelf != hasShips) { _shipLblGO.SetActive(hasShips); changed = true; }
+
+                ReorderContent(colonies, vehicles);
+                if (changed) LayoutRebuilder.ForceRebuildLayoutImmediate(ContentParent as RectTransform);
 
                 Severity overall = Severity.OK;
                 foreach (var c in colonies)
                 {
                     var (warn, crit) = Config.GetThresholds(c.OI.ObjectName);
-                    BuildColonyRow(c, warn, crit);
-                    Severity s = c.Days <= crit ? Severity.Critical
-                        : c.Days <= warn ? Severity.Warning
-                        : Severity.OK;
+                    Severity s = c.Days <= crit ? Severity.Critical : c.Days <= warn ? Severity.Warning : Severity.OK;
                     if (s > overall) overall = s;
                 }
-
-                if (colonies.Count == 0 && vehicles.Count == 0)
-                    AddMessageRow("No colonized bodies or ships with crew found.");
-
-                if (vehicles.Count > 0)
+                foreach (var v in vehicles)
                 {
-                    AddSectionSeparator("SHIPS IN TRANSIT");
-                    foreach (var v in vehicles)
+                    bool willArrive = v.DaysToArrival <= 0 || v.Days >= v.DaysToArrival;
+                    if (!willArrive)
                     {
-                        BuildVehicleRow(v);
-                        bool willArrive = v.DaysToArrival <= 0 || v.Days >= v.DaysToArrival;
-                        if (!willArrive)
-                        {
-                            Severity s = (v.Days < v.DaysToArrival - 7) ? Severity.Critical : Severity.Warning;
-                            if (s > overall) overall = s;
-                        }
+                        Severity s = (v.Days < v.DaysToArrival - 7) ? Severity.Critical : Severity.Warning;
+                        if (s > overall) overall = s;
                     }
                 }
-
                 UpdateIndicatorSeverity(overall);
-                LayoutRebuilder.ForceRebuildLayoutImmediate(ContentParent as RectTransform);
             }
             catch (Exception e)
             {
                 TrackerLog.LogError($"[LST] RefreshRows exception: {e}");
             }
+        }
+
+        private void EnsureHeaderRows()
+        {
+            if (_headerBuilt) return;
+            _headerBuilt = true;
+
+            _titleRowGO = new GameObject("TitleRow", typeof(RectTransform));
+            _titleRowGO.transform.SetParent(ContentParent, false);
+            _titleRowGO.AddComponent<LayoutElement>().preferredHeight = 26f;
+            _titleLbl = _titleRowGO.AddComponent<TextMeshProUGUI>();
+            if (FontAsset != null) _titleLbl.font = FontAsset;
+            _titleLbl.fontSize           = 12f;
+            _titleLbl.fontStyle          = FontStyles.Bold;
+            _titleLbl.color              = Color.white;
+            _titleLbl.enableWordWrapping = false;
+            _titleLbl.alignment          = TextAlignmentOptions.MidlineLeft;
+            _titleLbl.margin             = new Vector4(6, 4, 6, 0);
+
+            (_headerRowGO, _headerSepGO) = AddHeaderRow();
+
+            _emptyMsgGO = new GameObject("MsgRow", typeof(RectTransform));
+            _emptyMsgGO.transform.SetParent(ContentParent, false);
+            _emptyMsgGO.AddComponent<LayoutElement>().preferredHeight = 20f;
+            _emptyMsgLbl = _emptyMsgGO.AddComponent<TextMeshProUGUI>();
+            if (FontAsset != null) _emptyMsgLbl.font = FontAsset;
+            _emptyMsgLbl.fontSize           = 11f;
+            _emptyMsgLbl.color              = new Color(0.65f, 0.65f, 0.65f);
+            _emptyMsgLbl.enableWordWrapping = false;
+            _emptyMsgLbl.alignment          = TextAlignmentOptions.MidlineLeft;
+            _emptyMsgLbl.margin             = new Vector4(6, 0, 6, 0);
+            _emptyMsgGO.SetActive(false);
+
+            _shipSepGO = new GameObject("SectionSep", typeof(RectTransform));
+            _shipSepGO.transform.SetParent(ContentParent, false);
+            _shipSepGO.AddComponent<LayoutElement>().preferredHeight = 1f;
+            _shipSepGO.AddComponent<Image>().color = new Color(0.35f, 0.35f, 0.35f, 1f);
+            _shipSepGO.SetActive(false);
+
+            _shipLblGO = new GameObject("SectionLabel", typeof(RectTransform));
+            _shipLblGO.transform.SetParent(ContentParent, false);
+            _shipLblGO.AddComponent<LayoutElement>().preferredHeight = 18f;
+            var shipLbl = _shipLblGO.AddComponent<TextMeshProUGUI>();
+            if (FontAsset != null) shipLbl.font = FontAsset;
+            shipLbl.text               = "SHIPS IN TRANSIT";
+            shipLbl.fontSize           = 10f;
+            shipLbl.fontStyle          = FontStyles.Bold;
+            shipLbl.color              = new Color(0.55f, 0.55f, 0.55f);
+            shipLbl.enableWordWrapping = false;
+            shipLbl.alignment          = TextAlignmentOptions.MidlineLeft;
+            shipLbl.margin             = new Vector4(6, 2, 6, 0);
+            _shipLblGO.SetActive(false);
+        }
+
+        private bool SyncColonyRows(List<ColonyData> colonies)
+        {
+            bool changed = false;
+            var activeNames = new HashSet<string>(colonies.Select(c => c.OI.ObjectName));
+
+            var stale = new List<string>();
+            foreach (var key in _colonyRowCache.Keys)
+                if (!activeNames.Contains(key)) stale.Add(key);
+            foreach (var key in stale)
+            {
+                UnityEngine.Object.DestroyImmediate(_colonyRowCache[key].GO);
+                _colonyRowCache.Remove(key);
+                changed = true;
+            }
+
+            foreach (var c in colonies)
+            {
+                var (warn, crit) = Config.GetThresholds(c.OI.ObjectName);
+                if (!_colonyRowCache.TryGetValue(c.OI.ObjectName, out var cache))
+                {
+                    _colonyRowCache[c.OI.ObjectName] = CreateColonyRow(c, warn, crit);
+                    changed = true;
+                }
+                else
+                {
+                    UpdateColonyRow(cache, c, warn, crit);
+                }
+            }
+            return changed;
+        }
+
+        private bool SyncVehicleRows(List<VehicleData> vehicles)
+        {
+            bool changed = false;
+            var activeNames = new HashSet<string>(vehicles.Select(v => v.Name));
+
+            var stale = new List<string>();
+            foreach (var key in _vehicleRowCache.Keys)
+                if (!activeNames.Contains(key)) stale.Add(key);
+            foreach (var key in stale)
+            {
+                UnityEngine.Object.DestroyImmediate(_vehicleRowCache[key].GO);
+                _vehicleRowCache.Remove(key);
+                changed = true;
+            }
+
+            foreach (var v in vehicles)
+            {
+                if (!_vehicleRowCache.TryGetValue(v.Name, out var cache))
+                {
+                    _vehicleRowCache[v.Name] = CreateVehicleRow(v);
+                    changed = true;
+                }
+                else
+                {
+                    UpdateVehicleRow(cache, v);
+                }
+            }
+            return changed;
+        }
+
+        private void ReorderContent(List<ColonyData> colonies, List<VehicleData> vehicles)
+        {
+            int idx = 0;
+            _titleRowGO.transform.SetSiblingIndex(idx++);
+            _headerRowGO.transform.SetSiblingIndex(idx++);
+            _headerSepGO.transform.SetSiblingIndex(idx++);
+            foreach (var c in colonies)
+                if (_colonyRowCache.TryGetValue(c.OI.ObjectName, out var row))
+                    row.GO.transform.SetSiblingIndex(idx++);
+            _emptyMsgGO.transform.SetSiblingIndex(idx++);
+            _shipSepGO.transform.SetSiblingIndex(idx++);
+            _shipLblGO.transform.SetSiblingIndex(idx++);
+            foreach (var v in vehicles)
+                if (_vehicleRowCache.TryGetValue(v.Name, out var row))
+                    row.GO.transform.SetSiblingIndex(idx++);
+        }
+
+        private StatusRowCache CreateColonyRow(ColonyData c, double warn, double crit)
+        {
+            GameObject rowGO = MakeRowContainer($"Row_{c.OI.ObjectName}", 22f);
+            rowGO.AddComponent<Image>().color = new Color(0, 0, 0, 0);
+            var cache = new StatusRowCache
+            {
+                GO        = rowGO,
+                NameCol   = AddColumn(rowGO.transform, 0f, 1f, TextAlignmentOptions.MidlineLeft, "", 120f),
+                PopCol    = AddColumn(rowGO.transform, ColPop,    0f, TextAlignmentOptions.MidlineRight, ""),
+                SupplyCol = AddColumn(rowGO.transform, ColSupply, 0f, TextAlignmentOptions.MidlineRight, ""),
+                ProdCol   = AddColumn(rowGO.transform, ColProd,   0f, TextAlignmentOptions.MidlineRight, ""),
+                ConsCol   = AddColumn(rowGO.transform, ColCons,   0f, TextAlignmentOptions.MidlineRight, ""),
+                DaysCol   = AddColumn(rowGO.transform, ColDays,   0f, TextAlignmentOptions.MidlineRight, ""),
+                Btn       = rowGO.AddComponent<Button>(),
+            };
+            UpdateColonyRow(cache, c, warn, crit);
+            return cache;
+        }
+
+        private void UpdateColonyRow(StatusRowCache cache, ColonyData c, double warn, double crit)
+        {
+            if (!ReferenceEquals(cache.BoundIdentity, c.OI))
+            {
+                cache.Btn.onClick.RemoveAllListeners();
+                ObjectInfo oiRef = c.OI;
+                cache.Btn.onClick.AddListener(() =>
+                {
+                    try { UIManager.Instance.Open(EWindowType.ObjectInfo, oiRef); }
+                    catch (Exception e) { TrackerLog.LogError($"[LST] colony click: {e.Message}"); }
+                });
+                cache.BoundIdentity = c.OI;
+            }
+
+            string dotColorHex = c.Days <= crit ? "#FF3333" : c.Days <= warn ? "#FF9900" : "#44BB44";
+            string spriteName  = c.OI.ImagePlanetUI?.name ?? "";
+            string icon        = spriteName.Length > 0 ? $"<sprite name={spriteName}> " : "";
+            cache.NameCol.text  = $"<color={dotColorHex}>●</color>  {icon}{c.OI.ObjectName}";
+            cache.NameCol.color = Color.white;
+            cache.PopCol.text   = $"{c.Pop}";
+            cache.PopCol.color  = new Color(0.85f, 0.85f, 0.85f);
+            cache.SupplyCol.text  = FormatSupply(c.Supply);
+            cache.SupplyCol.color = new Color(0.85f, 0.85f, 0.85f);
+            cache.ProdCol.text    = FormatConsumption(c.ProdPerDay);
+            cache.ProdCol.color   = new Color(0.85f, 0.85f, 0.85f);
+            cache.ConsCol.text    = FormatConsumption(c.PerDay);
+            cache.ConsCol.color   = new Color(0.85f, 0.85f, 0.85f);
+            Color daysColor = c.Days <= crit ? new Color(1f, 0.2f, 0.2f)
+                : c.Days <= warn ? new Color(1f, 0.6f, 0f)
+                : new Color(0.85f, 0.85f, 0.85f);
+            cache.DaysCol.text  = FormatDays(c.Days);
+            cache.DaysCol.color = daysColor;
+        }
+
+        private StatusRowCache CreateVehicleRow(VehicleData v)
+        {
+            GameObject rowGO = MakeRowContainer($"VRow_{v.Name}", 22f);
+            rowGO.AddComponent<Image>().color = new Color(0, 0, 0, 0);
+            var cache = new StatusRowCache
+            {
+                GO        = rowGO,
+                NameCol   = AddColumn(rowGO.transform, 0f, 1f, TextAlignmentOptions.MidlineLeft, "", 120f),
+                PopCol    = AddColumn(rowGO.transform, ColPop,    0f, TextAlignmentOptions.MidlineRight, ""),
+                SupplyCol = AddColumn(rowGO.transform, ColSupply, 0f, TextAlignmentOptions.MidlineRight, ""),
+                ProdCol   = AddColumn(rowGO.transform, ColProd,   0f, TextAlignmentOptions.MidlineRight, ""),
+                ConsCol   = AddColumn(rowGO.transform, ColCons,   0f, TextAlignmentOptions.MidlineRight, ""),
+                DaysCol   = AddColumn(rowGO.transform, ColDays,   0f, TextAlignmentOptions.MidlineRight, ""),
+                Btn       = rowGO.AddComponent<Button>(),
+            };
+            UpdateVehicleRow(cache, v);
+            return cache;
+        }
+
+        private void UpdateVehicleRow(StatusRowCache cache, VehicleData v)
+        {
+            if (!ReferenceEquals(cache.BoundIdentity, v.SC))
+            {
+                cache.Btn.onClick.RemoveAllListeners();
+                Spacecraft scRef = v.SC;
+                cache.Btn.onClick.AddListener(() =>
+                {
+                    try { UIManager.Instance.Open(EWindowType.SpaceCraftInfo, scRef); }
+                    catch (Exception e) { TrackerLog.LogError($"[LST] ship click: {e.Message}"); }
+                });
+                cache.BoundIdentity = v.SC;
+            }
+
+            var (defWarn, defCrit) = Config.Defaults;
+            bool willArrive = v.DaysToArrival <= 0 || v.Days >= v.DaysToArrival;
+
+            string dotColorHex;
+            if (double.IsPositiveInfinity(v.DaysToArrival))
+                dotColorHex = v.Days <= defCrit ? "#FF3333" : v.Days <= defWarn ? "#FF9900" : "#44BB44";
+            else
+                dotColorHex = willArrive ? "#44BB44" : v.Days >= v.DaysToArrival - 7 ? "#FF9900" : "#FF3333";
+
+            string originIcon = v.OriginSpriteName.Length > 0 ? $"<sprite name={v.OriginSpriteName}> " : "";
+            string originPart = v.OriginName.Length > 0 ? $"{originIcon}{v.OriginName}" : v.Name;
+            string shipIcon   = v.ShipSpriteName.Length > 0 ? $"<sprite name={v.ShipSpriteName}>" : "▶";
+            string destPart   = v.DestSpriteName.Length > 0
+                ? $"<sprite name={v.DestSpriteName}> {v.Destination}"
+                : v.Destination;
+            cache.NameCol.text  = $"<color={dotColorHex}>●</color>  {originPart} <color=#888888>→ {shipIcon} → {destPart}</color>";
+            cache.NameCol.color = Color.white;
+            cache.PopCol.text   = $"{v.Crew}";
+            cache.PopCol.color  = new Color(0.85f, 0.85f, 0.85f);
+            cache.SupplyCol.text  = FormatSupply(v.CurrentLS / 365.0);
+            cache.SupplyCol.color = new Color(0.85f, 0.85f, 0.85f);
+            cache.ProdCol.text    = $"{U}—{UE}";
+            cache.ProdCol.color   = new Color(0.85f, 0.85f, 0.85f);
+            cache.ConsCol.text    = FormatConsumption(v.ConsPerDayLS / 365.0);
+            cache.ConsCol.color   = new Color(0.85f, 0.85f, 0.85f);
+
+            Color daysColor;
+            if (double.IsPositiveInfinity(v.DaysToArrival))
+                daysColor = v.Days <= defCrit ? new Color(1f, 0.2f, 0.2f)
+                    : v.Days <= defWarn ? new Color(1f, 0.6f, 0f)
+                    : new Color(0.85f, 0.85f, 0.85f);
+            else
+                daysColor = willArrive ? new Color(0.85f, 0.85f, 0.85f)
+                    : v.Days >= v.DaysToArrival - 7 ? new Color(1f, 0.6f, 0f)
+                    : new Color(1f, 0.2f, 0.2f);
+
+            string etaSuffix = double.IsPositiveInfinity(v.DaysToArrival) ? ""
+                : $"<color=#555555> /{v.DaysToArrival:F0}d</color>";
+            cache.DaysCol.text  = FormatDays(v.Days) + etaSuffix;
+            cache.DaysCol.color = daysColor;
         }
 
         private void AddTitleRow(string text, Transform parent)
@@ -1020,7 +1300,7 @@ namespace LifeSupportTracker.UI
             lbl.margin             = new Vector4(6, 4, 6, 0);
         }
 
-        private void AddHeaderRow()
+        private (GameObject row, GameObject sep) AddHeaderRow()
         {
             GameObject rowGO = MakeRowContainer("HeaderRow", 20f);
             Color hc = new Color(0.55f, 0.55f, 0.55f);
@@ -1035,54 +1315,9 @@ namespace LifeSupportTracker.UI
             sep.transform.SetParent(ContentParent, false);
             sep.AddComponent<LayoutElement>().preferredHeight = 1f;
             sep.AddComponent<Image>().color = new Color(0.35f, 0.35f, 0.35f, 1f);
+            return (rowGO, sep);
         }
 
-        private void AddMessageRow(string text)
-        {
-            GameObject go = new GameObject("MsgRow", typeof(RectTransform));
-            go.transform.SetParent(ContentParent, false);
-            go.AddComponent<LayoutElement>().preferredHeight = 20f;
-            TextMeshProUGUI lbl = go.AddComponent<TextMeshProUGUI>();
-            if (FontAsset != null) lbl.font = FontAsset;
-            lbl.text               = text;
-            lbl.fontSize           = 11f;
-            lbl.color              = new Color(0.65f, 0.65f, 0.65f);
-            lbl.enableWordWrapping = false;
-            lbl.alignment          = TextAlignmentOptions.MidlineLeft;
-            lbl.margin             = new Vector4(6, 0, 6, 0);
-        }
-
-        private void BuildColonyRow(ColonyData c, double warn, double crit)
-        {
-            GameObject rowGO = MakeRowContainer($"Row_{c.OI.ObjectName}", 22f);
-            rowGO.AddComponent<Image>().color = new Color(0, 0, 0, 0);
-            Button rowBtn = rowGO.AddComponent<Button>();
-            ObjectInfo oiRef = c.OI;
-            rowBtn.onClick.AddListener(() =>
-            {
-                TrackerLog.LogInfo($"[LST] colony click: {oiRef.ObjectName}");
-                try { UIManager.Instance.Open(EWindowType.ObjectInfo, oiRef); }
-                catch (Exception e) { TrackerLog.LogError($"[LST] colony click: {e.Message}"); }
-            });
-
-            string dotColorHex = c.Days <= crit ? "#FF3333"
-                : c.Days <= warn ? "#FF9900"
-                : "#44BB44";
-            string spriteName = c.OI.ImagePlanetUI?.name ?? "";
-            string icon       = spriteName.Length > 0 ? $"<sprite name={spriteName}> " : "";
-            string nameText   = $"<color={dotColorHex}>●</color>  {icon}{c.OI.ObjectName}";
-
-            AddColumn(rowGO.transform, 0f, 1f, TextAlignmentOptions.MidlineLeft, nameText, 120f).color = Color.white;
-            AddColumn(rowGO.transform, ColPop,    0f, TextAlignmentOptions.MidlineRight, $"{c.Pop}").color                     = new Color(0.85f, 0.85f, 0.85f);
-            AddColumn(rowGO.transform, ColSupply, 0f, TextAlignmentOptions.MidlineRight, FormatSupply(c.Supply)).color          = new Color(0.85f, 0.85f, 0.85f);
-            AddColumn(rowGO.transform, ColProd,   0f, TextAlignmentOptions.MidlineRight, FormatConsumption(c.ProdPerDay)).color = new Color(0.85f, 0.85f, 0.85f);
-            AddColumn(rowGO.transform, ColCons,   0f, TextAlignmentOptions.MidlineRight, FormatConsumption(c.PerDay)).color     = new Color(0.85f, 0.85f, 0.85f);
-
-            Color daysColor = c.Days <= crit ? new Color(1f, 0.2f, 0.2f)
-                : c.Days <= warn ? new Color(1f, 0.6f, 0f)
-                : new Color(0.85f, 0.85f, 0.85f);
-            AddColumn(rowGO.transform, ColDays, 0f, TextAlignmentOptions.MidlineRight, FormatDays(c.Days)).color = daysColor;
-        }
 
         private GameObject MakeRowContainer(string name, float height)
         {
@@ -1155,26 +1390,6 @@ namespace LifeSupportTracker.UI
             if (Mover != null) Mover.IsCritical = critical;
         }
 
-        private void AddSectionSeparator(string label)
-        {
-            GameObject sep = new GameObject("SectionSep", typeof(RectTransform));
-            sep.transform.SetParent(ContentParent, false);
-            sep.AddComponent<LayoutElement>().preferredHeight = 1f;
-            sep.AddComponent<Image>().color = new Color(0.35f, 0.35f, 0.35f, 1f);
-
-            GameObject go = new GameObject("SectionLabel", typeof(RectTransform));
-            go.transform.SetParent(ContentParent, false);
-            go.AddComponent<LayoutElement>().preferredHeight = 18f;
-            TextMeshProUGUI lbl = go.AddComponent<TextMeshProUGUI>();
-            if (FontAsset != null) lbl.font = FontAsset;
-            lbl.text               = label;
-            lbl.fontSize           = 10f;
-            lbl.fontStyle          = FontStyles.Bold;
-            lbl.color              = new Color(0.55f, 0.55f, 0.55f);
-            lbl.enableWordWrapping = false;
-            lbl.alignment          = TextAlignmentOptions.MidlineLeft;
-            lbl.margin             = new Vector4(6, 2, 6, 0);
-        }
 
         private static string ResolveShipSprite(Spacecraft sc, ManualLogSource log)
         {
@@ -1187,68 +1402,6 @@ namespace LifeSupportTracker.UI
             return "";
         }
 
-        private void BuildVehicleRow(VehicleData v)
-        {
-            var (defWarn, defCrit) = Config.Defaults;
-
-            GameObject rowGO = MakeRowContainer($"VRow_{v.Name}", 22f);
-            rowGO.AddComponent<Image>().color = new Color(0, 0, 0, 0);
-            Button rowBtn = rowGO.AddComponent<Button>();
-            Spacecraft scRef = v.SC;
-            rowBtn.onClick.AddListener(() =>
-            {
-                TrackerLog.LogInfo($"[LST] ship click: {v.Name}");
-                try { UIManager.Instance.Open(EWindowType.SpaceCraftInfo, scRef); }
-                catch (Exception e) { TrackerLog.LogError($"[LST] ship click: {e.Message}"); }
-            });
-
-            bool willArrive = v.DaysToArrival <= 0 || v.Days >= v.DaysToArrival;
-            string dotColorHex;
-            if (double.IsPositiveInfinity(v.DaysToArrival))
-            {
-                dotColorHex = v.Days <= defCrit ? "#FF3333"
-                    : v.Days <= defWarn ? "#FF9900"
-                    : "#44BB44";
-            }
-            else
-            {
-                dotColorHex = willArrive ? "#44BB44"
-                    : v.Days >= v.DaysToArrival - 7 ? "#FF9900"
-                    : "#FF3333";
-            }
-
-            string originIcon = v.OriginSpriteName.Length > 0 ? $"<sprite name={v.OriginSpriteName}> " : "";
-            string originPart = v.OriginName.Length > 0 ? $"{originIcon}{v.OriginName}" : v.Name;
-            string shipIcon   = v.ShipSpriteName.Length > 0 ? $"<sprite name={v.ShipSpriteName}>" : "▶";
-            string destPart   = v.DestSpriteName.Length > 0
-                ? $"<sprite name={v.DestSpriteName}> {v.Destination}"
-                : v.Destination;
-            string nameText   = $"<color={dotColorHex}>●</color>  {originPart} <color=#888888>→ {shipIcon} → {destPart}</color>";
-            AddColumn(rowGO.transform, 0f, 1f, TextAlignmentOptions.MidlineLeft, nameText, 120f).color = Color.white;
-            AddColumn(rowGO.transform, ColPop,    0f, TextAlignmentOptions.MidlineRight, $"{v.Crew}").color                      = new Color(0.85f, 0.85f, 0.85f);
-            AddColumn(rowGO.transform, ColSupply, 0f, TextAlignmentOptions.MidlineRight, FormatSupply(v.CurrentLS / 365.0)).color = new Color(0.85f, 0.85f, 0.85f);
-            AddColumn(rowGO.transform, ColProd,   0f, TextAlignmentOptions.MidlineRight, $"{U}—{UE}").color                      = new Color(0.85f, 0.85f, 0.85f);
-            AddColumn(rowGO.transform, ColCons,   0f, TextAlignmentOptions.MidlineRight, FormatConsumption(v.ConsPerDayLS / 365.0)).color = new Color(0.85f, 0.85f, 0.85f);
-
-            Color daysColor;
-            if (double.IsPositiveInfinity(v.DaysToArrival))
-            {
-                daysColor = v.Days <= defCrit ? new Color(1f, 0.2f, 0.2f)
-                    : v.Days <= defWarn ? new Color(1f, 0.6f, 0f)
-                    : new Color(0.85f, 0.85f, 0.85f);
-            }
-            else
-            {
-                daysColor = willArrive ? new Color(0.85f, 0.85f, 0.85f)
-                    : v.Days >= v.DaysToArrival - 7 ? new Color(1f, 0.6f, 0f)
-                    : new Color(1f, 0.2f, 0.2f);
-            }
-
-            string etaSuffix = double.IsPositiveInfinity(v.DaysToArrival) ? ""
-                : $"<color=#555555> /{v.DaysToArrival:F0}d</color>";
-            AddColumn(rowGO.transform, ColDays, 0f, TextAlignmentOptions.MidlineRight,
-                FormatDays(v.Days) + etaSuffix).color = daysColor;
-        }
 
         private struct ColonyData
         {

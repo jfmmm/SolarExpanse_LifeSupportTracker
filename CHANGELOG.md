@@ -5,6 +5,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-05-17
+### Fixed
+- Status tab no longer destroys and recreates all UI rows on every 5-second refresh. Rows are now cached and updated in place, eliminating per-tick GameObject allocation and TMP mesh rebuilds.
+- Layout rebuild is now skipped when only cell values change (no rows added or removed), reducing main-thread stalls on large colony lists.
+- Removed three `LogInfo` calls that fired on every refresh cycle.
+
 ## [1.1.0] - 2026-05-12
 ### Changed
 - SETTINGS tab renamed to ALERT THRESHOLDS.
