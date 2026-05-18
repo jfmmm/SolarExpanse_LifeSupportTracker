@@ -5,6 +5,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-05-18
+### Added
+- INCOME column showing daily colonist income (`42k$/d`, `1.2M$/d`) for each body, between CONS/DAY and LEFT. Uses reflection for safe stable/beta compatibility — shows `—` on stable builds that don't support the property.
+- Ship life support now includes cargo supply in addition to scheduled supply, so ships carrying supply crates report correct days remaining.
+
+### Changed
+- Refresh is now driven by a `TrackerUpdater` component on the always-active indicator GameObject instead of `Update()` on the panel, which is inactive when closed. Panel refreshes every 5 seconds even while closed so data is current when reopened.
+
 ## [1.2.0] - 2026-05-17
 ### Fixed
 - Status tab no longer destroys and recreates all UI rows on every 5-second refresh. Rows are now cached and updated in place, eliminating per-tick GameObject allocation and TMP mesh rebuilds.

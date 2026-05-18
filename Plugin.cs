@@ -5,7 +5,7 @@ using LifeSupportTracker.UI;
 
 namespace LifeSupportTracker
 {
-    [BepInPlugin("com.mod.solarexpanse.lifesupporttracker", "LifeSupportTracker", "1.2.0")]
+    [BepInPlugin("com.mod.solarexpanse.lifesupporttracker", "LifeSupportTracker", "1.3.0")]
     public class Plugin : BaseUnityPlugin
     {
         internal static SupplyTrackerConfig TrackerConfig;

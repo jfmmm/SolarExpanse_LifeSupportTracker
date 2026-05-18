@@ -284,6 +284,8 @@ namespace LifeSupportTracker.UI
                 tracker.Mover          = mover;
                 mover.FlashLabel       = indicatorLabel;
 
+                indicatorGO.AddComponent<TrackerUpdater>().Tracker = tracker;
+
                 log.LogInfo("[LST] Injection complete");
             }
             catch (Exception e)
@@ -585,9 +587,18 @@ namespace LifeSupportTracker.UI
         private const float ColProd   = 72f;
         private const float ColCons   = 72f;
         private const float ColDays   = 62f;
+        private const float ColIncome = 72f;
 
-        private float _refreshTimer;
-        private const float RefreshInterval = 5.0f;
+        // Reflection handles stable/beta compatibility: direct IL references to beta-only
+        // properties would cause MissingMethodException during JIT even if guarded by an if.
+        private static readonly PropertyInfo _propHumanDailyMoneyProduction =
+            typeof(Economic).GetProperty("HumanDailyMoneyProduction");
+        private static readonly PropertyInfo _propHumanDailyMoneyProductionMultiplier =
+            typeof(ObjectInfo).GetProperty("HumanDailyMoneyProductionMultiplier");
+        private static readonly bool _supportsColonistIncome =
+            _propHumanDailyMoneyProduction != null && _propHumanDailyMoneyProductionMultiplier != null;
+
+        internal const float RefreshInterval = 5.0f;
 
         // ── Persistent status-tab UI rows ─────────────────────────────────────
         private bool _headerBuilt;
@@ -605,22 +616,12 @@ namespace LifeSupportTracker.UI
         private class StatusRowCache
         {
             public GameObject GO;
-            public TextMeshProUGUI NameCol, PopCol, SupplyCol, ProdCol, ConsCol, DaysCol;
+            public TextMeshProUGUI NameCol, PopCol, SupplyCol, ProdCol, ConsCol, DaysCol, IncomeCol;
             public Button Btn;
             public object BoundIdentity;
         }
 
         private enum Severity { OK, Warning, Critical }
-
-        private void Update()
-        {
-            _refreshTimer += Time.deltaTime;
-            if (_refreshTimer >= RefreshInterval)
-            {
-                _refreshTimer = 0f;
-                RefreshRows();
-            }
-        }
 
         // ── Tab switching ─────────────────────────────────────────────────────
 
@@ -920,12 +921,13 @@ namespace LifeSupportTracker.UI
                     double supply  = data.CheckResources(supplyRD);
                     double perDay  = data.GetSupplyDemandPerDay();
                     double days    = perDay > 0.0 ? supply / perDay : double.PositiveInfinity;
-                    var (pop, _)   = data.GetPopulationHabitats();
+                    var (pop, habCap) = data.GetPopulationHabitats();
                     RowResourcesData supplyRow = data.ListRowResourcesData
                         .FirstOrDefault(r => r.ResourcesType?.ID == "id_resource_supply");
-                    double prodPerDay = supplyRow?.InTake ?? 0.0;
+                    double prodPerDay   = supplyRow?.InTake ?? 0.0;
+                    double incomePerDay = ComputeColonistIncomePerDay(pop, habCap, oi);
 
-                    colonies.Add(new ColonyData { OI = oi, Days = days, Supply = supply, PerDay = perDay, ProdPerDay = prodPerDay, Pop = pop });
+                    colonies.Add(new ColonyData { OI = oi, Days = days, Supply = supply, PerDay = perDay, ProdPerDay = prodPerDay, Pop = pop, IncomePerDay = incomePerDay });
                 }
                 colonies.Sort((a, b) => a.Days.CompareTo(b.Days));
                 _lastActiveBodyNames = colonies.Select(c => c.OI.ObjectName).ToList();
@@ -944,10 +946,12 @@ namespace LifeSupportTracker.UI
                             sc.CurrentPhase != Spacecraft.EPhase.Landing) continue;
                         int crew = sc.CargoAll.HowMuchCrew();
                         if (crew <= 0) continue;
-                        int currentLS = sc.GetLifeSupportCurrentWhenFly();
+                        int scheduledLS = sc.GetLifeSupportCurrentWhenFly();
+                        double cargoLS   = sc.CargoAll.GetLifeSupportFromCargoSupply();
+                        double totalLS   = Math.Max(0, scheduledLS) + cargoLS;
                         double consPerDayLS = crew / (double)lsMult;
-                        double days = consPerDayLS > 0 && currentLS > 0
-                            ? currentLS / consPerDayLS
+                        double days = consPerDayLS > 0 && totalLS > 0
+                            ? totalLS / consPerDayLS
                             : double.PositiveInfinity;
                         ObjectInfo originOI = null;
                         try { originOI = sc.MissionStart; } catch { }
@@ -971,7 +975,7 @@ namespace LifeSupportTracker.UI
                             Name             = sc.GetSpacecraftName(),
                             Destination      = sc.MissionTarget?.ObjectName ?? "?",
                             Crew             = crew,
-                            CurrentLS        = currentLS,
+                            CurrentLS        = totalLS,
                             ConsPerDayLS     = consPerDayLS,
                             Days             = days,
                             DaysToArrival    = daysToArrival,
@@ -1168,6 +1172,7 @@ namespace LifeSupportTracker.UI
                 SupplyCol = AddColumn(rowGO.transform, ColSupply, 0f, TextAlignmentOptions.MidlineRight, ""),
                 ProdCol   = AddColumn(rowGO.transform, ColProd,   0f, TextAlignmentOptions.MidlineRight, ""),
                 ConsCol   = AddColumn(rowGO.transform, ColCons,   0f, TextAlignmentOptions.MidlineRight, ""),
+                IncomeCol = AddColumn(rowGO.transform, ColIncome, 0f, TextAlignmentOptions.MidlineRight, ""),
                 DaysCol   = AddColumn(rowGO.transform, ColDays,   0f, TextAlignmentOptions.MidlineRight, ""),
                 Btn       = rowGO.AddComponent<Button>(),
             };
@@ -1207,6 +1212,8 @@ namespace LifeSupportTracker.UI
                 : new Color(0.85f, 0.85f, 0.85f);
             cache.DaysCol.text  = FormatDays(c.Days);
             cache.DaysCol.color = daysColor;
+            cache.IncomeCol.text  = FormatIncome(c.IncomePerDay);
+            cache.IncomeCol.color = new Color(0.85f, 0.85f, 0.85f);
         }
 
         private StatusRowCache CreateVehicleRow(VehicleData v)
@@ -1221,6 +1228,7 @@ namespace LifeSupportTracker.UI
                 SupplyCol = AddColumn(rowGO.transform, ColSupply, 0f, TextAlignmentOptions.MidlineRight, ""),
                 ProdCol   = AddColumn(rowGO.transform, ColProd,   0f, TextAlignmentOptions.MidlineRight, ""),
                 ConsCol   = AddColumn(rowGO.transform, ColCons,   0f, TextAlignmentOptions.MidlineRight, ""),
+                IncomeCol = AddColumn(rowGO.transform, ColIncome, 0f, TextAlignmentOptions.MidlineRight, ""),
                 DaysCol   = AddColumn(rowGO.transform, ColDays,   0f, TextAlignmentOptions.MidlineRight, ""),
                 Btn       = rowGO.AddComponent<Button>(),
             };
@@ -1282,6 +1290,8 @@ namespace LifeSupportTracker.UI
                 : $"<color=#555555> /{v.DaysToArrival:F0}d</color>";
             cache.DaysCol.text  = FormatDays(v.Days) + etaSuffix;
             cache.DaysCol.color = daysColor;
+            cache.IncomeCol.text  = $"{U}—{UE}";
+            cache.IncomeCol.color = new Color(0.85f, 0.85f, 0.85f);
         }
 
         private void AddTitleRow(string text, Transform parent)
@@ -1309,6 +1319,7 @@ namespace LifeSupportTracker.UI
             AddColumn(rowGO.transform, ColSupply, 0f, TextAlignmentOptions.MidlineRight, "SUPPLY").color  = hc;
             AddColumn(rowGO.transform, ColProd,   0f, TextAlignmentOptions.MidlineRight, "PROD/DAY").color = hc;
             AddColumn(rowGO.transform, ColCons,   0f, TextAlignmentOptions.MidlineRight, "CONS/DAY").color = hc;
+            AddColumn(rowGO.transform, ColIncome, 0f, TextAlignmentOptions.MidlineRight, _supportsColonistIncome ? "INCOME" : "").color = hc;
             AddColumn(rowGO.transform, ColDays,   0f, TextAlignmentOptions.MidlineRight, "LEFT").color    = hc;
 
             GameObject sep = new GameObject("Separator", typeof(RectTransform));
@@ -1379,6 +1390,27 @@ namespace LifeSupportTracker.UI
             return $"{days:F0}{U}d{UE}";
         }
 
+        private static double ComputeColonistIncomePerDay(long crew, long habCap, ObjectInfo oi)
+        {
+            if (!_supportsColonistIncome) return double.NaN;
+            try
+            {
+                float baseRate = (float)_propHumanDailyMoneyProduction.GetValue(MonoBehaviourSingleton<GameManager>.Instance.Economic);
+                float mult     = (float)_propHumanDailyMoneyProductionMultiplier.GetValue(oi);
+                return (double)Math.Min(crew, habCap) * mult * baseRate;
+            }
+            catch { return double.NaN; }
+        }
+
+        private static string FormatIncome(double income)
+        {
+            if (double.IsNaN(income)) return $"{U}—{UE}";
+            if (income <= 0)          return $"0{U}$/d{UE}";
+            if (income >= 1_000_000)  return $"{income / 1_000_000:F1}{U}M$/d{UE}";
+            if (income >= 1_000)      return $"{income / 1_000:F1}{U}k$/d{UE}";
+            return $"{income:F0}{U}$/d{UE}";
+        }
+
         private void UpdateIndicatorSeverity(Severity severity)
         {
             if (IndicatorLabel == null) return;
@@ -1406,7 +1438,7 @@ namespace LifeSupportTracker.UI
         private struct ColonyData
         {
             public ObjectInfo OI;
-            public double Days, Supply, PerDay, ProdPerDay;
+            public double Days, Supply, PerDay, ProdPerDay, IncomePerDay;
             public long Pop;
         }
 
@@ -1414,8 +1446,8 @@ namespace LifeSupportTracker.UI
         {
             public Spacecraft SC;
             public string Name, Destination;
-            public int Crew, CurrentLS;
-            public double ConsPerDayLS, Days, DaysToArrival;
+            public int Crew;
+            public double CurrentLS, ConsPerDayLS, Days, DaysToArrival;
             public string OriginName, OriginSpriteName, DestSpriteName, ShipSpriteName;
         }
     }
@@ -1588,5 +1620,23 @@ namespace LifeSupportTracker.UI
 
         private static string Esc(string s)   => s.Replace("\\", "\\\\").Replace(";", "\\;").Replace("=", "\\=");
         private static string Unesc(string s) => s.Replace("\\=", "=").Replace("\\;", ";").Replace("\\\\", "\\");
+    }
+
+    // Persistent updater — lives on the always-active indicator button so it keeps
+    // ticking and updating the severity dot even when the panel is closed.
+    internal class TrackerUpdater : MonoBehaviour
+    {
+        internal SupplyTrackerPanel Tracker;
+        private float _timer;
+
+        private void Update()
+        {
+            _timer += Time.deltaTime;
+            if (_timer >= SupplyTrackerPanel.RefreshInterval)
+            {
+                _timer = 0f;
+                Tracker?.RefreshRows();
+            }
+        }
     }
 }
