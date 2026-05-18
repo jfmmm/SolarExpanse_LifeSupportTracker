@@ -2,7 +2,7 @@ $ErrorActionPreference = "Stop"
 $name = "LifeSupportTracker"
 
 dotnet build -c Release
-if ($LASTEXITCODE -ne 0) { exit 1 }
+if (-not (Test-Path "bin/Release/net472/$name.dll")) { Write-Error "Build failed: DLL not found"; exit 1 }
 
 $version = (Select-String -Path "CHANGELOG.md" -Pattern '## \[(\d+\.\d+\.\d+)\]' |
     Select-Object -First 1).Matches.Groups[1].Value
