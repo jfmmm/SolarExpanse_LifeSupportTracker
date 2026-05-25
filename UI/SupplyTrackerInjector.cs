@@ -19,6 +19,7 @@ using TMPro;
 using UnityEngine;
 using UnityEngine.EventSystems;
 using UnityEngine.UI;
+using LifeSupportTracker.Patches;
 
 namespace LifeSupportTracker.UI
 {
@@ -204,6 +205,7 @@ namespace LifeSupportTracker.UI
                 resizeHandleGO.AddComponent<ResizeHandle>().PanelRT = panelRT;
 
                 panelGO.SetActive(false);
+                PauseScreenEscPatch.PanelGO = panelGO;
 
                 SupplyTrackerPanel tracker = panelGO.AddComponent<SupplyTrackerPanel>();
                 tracker.ContentParent     = contentGO.transform;
@@ -438,6 +440,8 @@ namespace LifeSupportTracker.UI
         private Vector2 _dragStartAnchoredPos;
         private Vector2 _pressScreenPos;
         private Vector2 _lastCanvasSize;
+        private Vector2 _normalizedPos;
+        private bool _normalizedPosSet;
 
         private void Awake()
         {
@@ -448,6 +452,7 @@ namespace LifeSupportTracker.UI
 
         private IEnumerator Start()
         {
+            yield return null;
             yield return null;
             PositionNextToNotificationButton();
         }
@@ -467,14 +472,13 @@ namespace LifeSupportTracker.UI
                 }
             }
 
-            // Push button (and open panel) back into bounds when the game window is resized.
             if (_canvasRT != null)
             {
                 Vector2 sz = _canvasRT.rect.size;
                 if (sz != _lastCanvasSize)
                 {
                     _lastCanvasSize = sz;
-                    Clamp();
+                    RestoreFromNormalizedPos();
                     RepositionPanel();
                 }
             }
@@ -499,6 +503,7 @@ namespace LifeSupportTracker.UI
 
             float x = btnTopLeft.x - 10f - _rt.sizeDelta.x;
             _rt.anchoredPosition = new Vector2(x, btnTopLeft.y - 5f);
+            StoreNormalizedPos();
             Log?.LogInfo($"[LST] indicator at {_rt.anchoredPosition} (btnTopLeft={btnTopLeft})");
         }
 
@@ -534,8 +539,29 @@ namespace LifeSupportTracker.UI
         public void OnEndDrag(PointerEventData e)
         {
             Clamp();
+            StoreNormalizedPos();
             RepositionPanel();
             if (Bg) Bg.color = NormalColor;
+        }
+
+        private void StoreNormalizedPos()
+        {
+            if (_canvasRT == null) return;
+            Rect cr = _canvasRT.rect;
+            if (cr.xMax <= 0f || cr.yMax <= 0f) return;
+            _normalizedPos = new Vector2(_rt.anchoredPosition.x / cr.xMax, _rt.anchoredPosition.y / cr.yMax);
+            _normalizedPosSet = true;
+        }
+
+        private void RestoreFromNormalizedPos()
+        {
+            if (_canvasRT == null) return;
+            if (_normalizedPosSet)
+            {
+                Rect cr = _canvasRT.rect;
+                _rt.anchoredPosition = new Vector2(_normalizedPos.x * cr.xMax, _normalizedPos.y * cr.yMax);
+            }
+            Clamp();
         }
 
         private void Clamp()
@@ -1638,5 +1664,8 @@ namespace LifeSupportTracker.UI
                 Tracker?.RefreshRows();
             }
         }
+
+        private void LateUpdate() => Patches.PauseScreenEscPatch.LateUpdateTick();
     }
+
 }

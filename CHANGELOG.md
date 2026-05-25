@@ -5,6 +5,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-05-25
+
+### Added
+- ESC key closes the panel.
+
+### Fixed
+- LIFE SUPPORT button snaps back to correct relative position after screen resize or fullscreen toggle instead of drifting to its old absolute coordinates.
+
 ## [1.3.0] - 2026-05-18
 ### Added
 - INCOME column showing daily colonist income (`42k$/d`, `1.2M$/d`) for each body, between CONS/DAY and LEFT. Uses reflection for safe stable/beta compatibility — shows `—` on stable builds that don't support the property.

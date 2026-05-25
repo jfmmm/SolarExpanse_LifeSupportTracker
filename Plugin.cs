@@ -5,7 +5,7 @@ using LifeSupportTracker.UI;
 
 namespace LifeSupportTracker
 {
-    [BepInPlugin("com.mod.solarexpanse.lifesupporttracker", "LifeSupportTracker", "1.3.0")]
+    [BepInPlugin("com.mod.solarexpanse.lifesupporttracker", "LifeSupportTracker", "1.4.0")]
     public class Plugin : BaseUnityPlugin
     {
         internal static SupplyTrackerConfig TrackerConfig;
@@ -13,7 +13,9 @@ namespace LifeSupportTracker
         private void Awake()
         {
             TrackerConfig = new SupplyTrackerConfig(Config);
-            new Harmony("com.mod.solarexpanse.lifesupporttracker").PatchAll();
+            var harmony = new Harmony("com.mod.solarexpanse.lifesupporttracker");
+            harmony.PatchAll();
+            Patches.PauseScreenEscPatch.Apply(harmony, Logger);
             Logger.LogInfo("LifeSupportTracker loaded");
         }
     }
