@@ -5,6 +5,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed
+- Crashed/destroyed asteroids no longer appear as ghost entries with their colonists still counted. The game keeps destroyed bodies in its master object list (`allObjectInfos`) with crew intact and only hides them visually, so colonists on an asteroid that crashed into a planet kept showing in the panel. Bodies are now filtered out using the game's `IsInGameDestroy` flag.
+
 ## [1.4.0] - 2026-05-25
 
 ### Added

@@ -941,6 +941,7 @@ namespace LifeSupportTracker.UI
                 var colonies = new List<ColonyData>();
                 foreach (ObjectInfo oi in allObjects)
                 {
+                    if (oi.IsInGameDestroy) continue; // skip crashed/destroyed bodies — game keeps them in allObjectInfos with crew intact
                     ObjectInfoData data = oi.GetObjectInfoData(player);
                     if (data == null || data.CurrentCrew <= 0) continue;
 
