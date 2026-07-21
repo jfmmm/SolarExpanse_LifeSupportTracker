@@ -947,16 +947,31 @@ namespace LifeSupportTracker.UI
 
                     double supply  = data.CheckResources(supplyRD);
                     double perDay  = data.GetSupplyDemandPerDay();
-                    double days    = perDay > 0.0 ? supply / perDay : double.PositiveInfinity;
-                    var (pop, habCap) = data.GetPopulationHabitats();
                     RowResourcesData supplyRow = data.ListRowResourcesData
                         .FirstOrDefault(r => r.ResourcesType?.ID == "id_resource_supply");
                     double prodPerDay   = supplyRow?.InTake ?? 0.0;
+                    // LEFT is time until supply runs out, so it must be driven by the NET
+                    // drain (consumption − production). When production meets or exceeds
+                    // consumption the stockpile never depletes, so the runway is infinite
+                    // (FormatDays renders PositiveInfinity as "∞").
+                    double netDrain = perDay - prodPerDay;
+                    double days    = netDrain > 0.0 ? supply / netDrain : double.PositiveInfinity;
+                    var (pop, habCap) = data.GetPopulationHabitats();
                     double incomePerDay = ComputeColonistIncomePerDay(pop, habCap, oi);
 
                     colonies.Add(new ColonyData { OI = oi, Days = days, Supply = supply, PerDay = perDay, ProdPerDay = prodPerDay, Pop = pop, IncomePerDay = incomePerDay });
                 }
-                colonies.Sort((a, b) => a.Days.CompareTo(b.Days));
+                // Rank by urgency (fewest days left first). Infinite runways (net
+                // production ≥ consumption) all tie at PositiveInfinity and land at the
+                // bottom; List.Sort is unstable, so break ties by name to keep that
+                // "safe" cluster in a stable, findable order across refreshes.
+                colonies.Sort((a, b) =>
+                {
+                    int byDays = a.Days.CompareTo(b.Days);
+                    return byDays != 0
+                        ? byDays
+                        : string.Compare(a.OI.ObjectName, b.OI.ObjectName, StringComparison.OrdinalIgnoreCase);
+                });
                 _lastActiveBodyNames = colonies.Select(c => c.OI.ObjectName).ToList();
 
                 var vehicles = new List<VehicleData>();

@@ -5,6 +5,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed
+- LEFT column no longer shows a countdown for colonies that produce as much supply as they consume. Time-to-depletion was computed as `supply / consumption`, ignoring the body's own production, so a colony producing 1.3 T/d against 0.31 T/d of consumption still reported ~1.7y remaining even though its stockpile was growing. The runway is now based on net drain (consumption − production), and a non-positive net drain reports an infinite runway (`∞`).
+- Status rows with equal time remaining now sort by body name instead of in an arbitrary order. Bodies with an infinite runway all tie at the bottom of the ranking, and `List.Sort` is unstable, so that group could reshuffle between refreshes.
+
 ## [1.4.1] - 2026-06-16
 
 ### Fixed
